@@ -1,0 +1,11 @@
+[agent]
+name = "NetSightPerceptionAgent"
+version = "2.0.0"
+entrypoint = "src/inference_agent.py"
+
+[resources]
+weights_path = "weights/model_weights.pth"
+accelerator = "T4"  # Ensures the platform targets proper GPU nodes if deploying online
+
+[skills]
+allowed = ["parse_satellite_geometry"]
