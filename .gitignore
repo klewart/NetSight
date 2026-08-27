@@ -2,6 +2,18 @@
 my_agents/weights/model_weights.pth
 *.pth
 
+# Large zip archives
+*.zip
+
+# Data directories (too large for git)
+data/india_dataset/
+data/maps/
+training_data/
+cache/
+
+# Test images
+test_*.png
+
 # Environment secrets
 .env
 

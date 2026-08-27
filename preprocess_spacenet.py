@@ -63,8 +63,8 @@ _STRIP_PREFIXES = re.compile(
     r"^(?:SN3_roads_(?:train|test)_)?",  # optional SN3 prefix
     re.IGNORECASE,
 )
-_STRIP_SUFFIXES = re.compile(
-    r"(?:_PS-(?:RGB|MS))?(?:_img\d+)?$",  # optional band / img suffix
+_STRIP_MIDDLE = re.compile(
+    r"_(?:PS-(?:RGB|MS)|geojson_roads)",  # optional band / modality tag
     re.IGNORECASE,
 )
 
@@ -77,12 +77,12 @@ def _extract_image_id(stem: str) -> str:
     Examples
     --------
     >>> _extract_image_id("SN3_roads_train_AOI_2_Vegas_PS-RGB_img1")
-    'aoi_2_vegas'
-    >>> _extract_image_id("AOI_2_Vegas_Scene_001")
-    'aoi_2_vegas_scene_001'
+    'aoi_2_vegas_img1'
+    >>> _extract_image_id("SN3_roads_train_AOI_2_Vegas_geojson_roads_img1")
+    'aoi_2_vegas_img1'
     """
     s = _STRIP_PREFIXES.sub("", stem)
-    s = _STRIP_SUFFIXES.sub("", s)
+    s = _STRIP_MIDDLE.sub("", s)
     return s.strip("_").lower()
 
 
@@ -146,6 +146,13 @@ def _read_image_as_array(
             logger.error("Failed to read image %s: %s", img_path.name, exc)
             return None
 
+    # Handle 16-bit remote sensing data properly to avoid psychedelic integer wrapping!
+    if img_arr.dtype == np.uint16 or img_arr.max() > 255:
+        # Robust min-max scaling based on 2nd and 98th percentiles (ignores extreme outliers/sensor noise)
+        p2, p98 = np.percentile(img_arr, (2, 98))
+        img_arr = np.clip(img_arr, p2, p98)
+        img_arr = (img_arr - p2) / (p98 - p2 + 1e-8) * 255.0
+    
     # Resize to tile_size × tile_size
     pil_img = Image.fromarray(img_arr.astype(np.uint8)).resize(
         (tile_size, tile_size), Image.LANCZOS
@@ -309,7 +316,7 @@ def preprocess(
     out_masks.mkdir(parents=True, exist_ok=True)
 
     # ---- Build lookup indices ----------------------------------------
-    img_index = _build_index(img_dir, (".tif", ".tiff"))
+    img_index = _build_index(img_dir, (".tif", ".tiff", ".png"))
     vec_index = _build_index(vec_dir, (".geojson", ".json"))
 
     logger.info(

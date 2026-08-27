@@ -12,21 +12,28 @@ root_path = Path(__file__).resolve().parents[1]
 if str(root_path) not in sys.path:
     sys.path.insert(0, str(root_path))
 
-from src.model import ViTUNet
+from src.model import ResNetUNet
 from src.mask_to_graph import mask_to_graph
 
-# ── 2. BULLETPROOF MODEL INITIALIZATION ───────────────────────────────────
-# We use two distinct variables here to prevent PyTorch from getting confused
+# ── 2. MODEL INITIALIZATION ──────────────────────────────────────────────
 device_str = "cuda" if torch.cuda.is_available() else "cpu"
 COMPUTE_DEVICE = torch.device(device_str)
 
-print(f"📦 Initializing ViT-UNet on {device_str.upper()}...", flush=True)
+print(f"📦 Initializing ResNet-UNet on {device_str.upper()}...", flush=True)
 
-model = ViTUNet(base_ch=64, vit_depth=4, vit_heads=8)
+model = ResNetUNet(encoder_name="resnet34", encoder_weights=None, in_channels=3, classes=1)
 weights_file = root_path / "weights" / "model_weights.pth"
 
-# Load using the string, then move using the object. Flawless execution.
-model.load_state_dict(torch.load(weights_file, map_location=device_str, weights_only=True))
+if not weights_file.exists():
+    # Try legacy weights
+    weights_file = root_path / "weights" / "model_weights_india_osm.pth"
+
+if weights_file.exists():
+    model.load_state_dict(torch.load(weights_file, map_location=device_str, weights_only=True), strict=False)
+    print(f"✅ Loaded weights from {weights_file.name}", flush=True)
+else:
+    print(f"⚠️ No weights found. Model will use random initialization.", flush=True)
+
 model.to(COMPUTE_DEVICE)
 model.eval()
 
@@ -43,16 +50,24 @@ def parse_satellite_geometry(image_path: str) -> str:
         )
         
     try:
-        with rasterio.open(image_path) as src:
-            # Safely grab up to 3 bands (prevents crashes on grayscale images)
-            bands = min(src.count, 3)
-            image = src.read(list(range(1, bands + 1)))
-            
-            # If the image is missing color channels, pad it for the neural net
-            if bands == 1:
-                image = np.repeat(image, 3, axis=0)
+        # Format-aware loading: try rasterio (GeoTIFF), fall back to PIL (PNG, JPG, etc.)
+        image = None
+        try:
+            with rasterio.open(image_path) as src:
+                # Safely grab up to 3 bands (prevents crashes on grayscale images)
+                bands = min(src.count, 3)
+                img_data = src.read(list(range(1, bands + 1)))
                 
-            image = np.transpose(image, (1, 2, 0)).astype(np.float32) / 255.0
+                # If the image is missing color channels, pad it for the neural net
+                if bands == 1:
+                    img_data = np.repeat(img_data, 3, axis=0)
+                    
+                image = np.transpose(img_data, (1, 2, 0)).astype(np.float32) / 255.0
+        except Exception:
+            # Fallback for PNG and other standard image formats
+            from PIL import Image as PILImage
+            pil_img = PILImage.open(image_path).convert("RGB")
+            image = np.array(pil_img, dtype=np.float32) / 255.0
             
         input_tensor = torch.tensor(image).permute(2, 0, 1).unsqueeze(0).to(COMPUTE_DEVICE)
         
